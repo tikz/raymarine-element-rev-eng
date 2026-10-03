@@ -1,0 +1,35 @@
+# Local configuration and credentials
+/local/
+/private/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+known_hosts*
+
+# Unreviewed evidence and device artifacts
+/evidence/
+/captures/
+/firmware/
+*.pcap
+*.pcapng
+*.bin
+*.img
+*.apk
+*.so
+*.log
+*.gpx
+*.kml
+*.kmz
+*.zip
+*.tar
+*.gz
+
+# Workstation artifacts
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
