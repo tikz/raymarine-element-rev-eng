@@ -9,7 +9,7 @@ The investigated baseline is product **E70531**, application **3.13.332**, bundl
 | Section | Contents |
 | --- | --- |
 | [Root access](#root-access) | Verified UID 0 execution through SFTP staging and the HTTP server |
-| [Python PoCs](#python-pocs) | Runnable navigation, RayDB and SFTP examples; offline tests |
+| [Python PoCs](#python-pocs) | Navigation, RayDB, SFTP, root/screenshots, route reads and offline AIS decoding |
 | [Architecture and compatibility](#architecture-and-compatibility) | Android platform, application services, GNSS implementation, established limits |
 | [Network services](#network-service-inventory) | Endpoint inventory, roles, discovery, unverified assignments |
 | [Native navigation protocol](#native-navigation-database-tcp-2051) | TCP 2051 framing, transactions, GPS decoding, freshness and no-fix behavior |
@@ -73,7 +73,7 @@ Later trials used this path to launch Dex jars with `app_process`, run native AR
 
 Staging is on tmpfs. The research created temporary directories, bounded each helper's runtime, removed the interpreter mapping and exact owned files, and checked that the former endpoint returned HTTP 404. Endpoint removal, process exit and window removal are separate checks. A detached helper can outlive its HTTP response, as verified in the later AIS trials; closing the request alone is not cleanup.
 
-This is verified temporary root execution, not a reboot-persistent root installation. A maintained client needs a scoped authenticated channel, device-side deadlines and cleanup; no generic execution client is supplied in this repository.
+This is verified temporary root execution, not a reboot-persistent root installation. A maintained client needs a scoped authenticated channel, device-side deadlines and cleanup; the [root probe](poc/root_probe.py) demonstrates fixed identity and screenshot operations, with no arbitrary-command option.
 
 Provenance: private EXP-039 identity probe; EXP-051/054 privileged screenshots and Android overlay; EXP-058 detached helper and forwarding trials; EXP-059/061/063 input and capture; EXP-065/066 native application rendering and lifecycle checks.
 
@@ -86,6 +86,9 @@ The [poc/](poc/) directory contains one-shot Python 3.10+ command-line examples.
 | [navigation.py](poc/navigation.py) | TCP 2051 preferred navigation-item reads and decoded JSON |
 | [raydb_get.py](poc/raydb_get.py) | TCP 23333 HELLO followed by one exact-key GET |
 | [sftp_device.py](poc/sftp_device.py) | Supply voltage, brightness bounds/readback, explicit brightness writes |
+| [root_probe.py](poc/root_probe.py) | Temporary root identity check or screenshot; fixed helper and endpoint cleanup |
+| [routes.py](poc/routes.py) | Read-only TCP 2053 route count and ordered GUID list |
+| [ais_decode.py](poc/ais_decode.py) | Offline decoding of one native target-change/deletion datagram |
 
 ### Navigation reads
 
@@ -132,11 +135,57 @@ python3 poc/sftp_device.py --host "$ELEMENT_HOST" --key "$ELEMENT_KEY" \
 
 `set-brightness` reads bounds and the previous raw level, prints them to stderr before writing, uploads the decimal value, and verifies `actual_brightness`. It performs no automatic restoration. Use `set-brightness --raw PREVIOUS_VALUE` to restore a previously recorded level. A failed upload may still have changed hardware state; the script reports that uncertainty and does not retry. Host-key checking stays enabled; no shell command execution or key enrollment is attempted. The default timeout is eight seconds per SFTP batch, not for the entire multi-batch operation.
 
+### Root identity and screenshots
+
+The [root access](#root-access) mechanism can be exercised with a fixed helper. It requires the same enrolled key and verified host-key file as SFTP. **These commands stage temporary files and invoke a privileged process on the device.** There is no arbitrary shell-script or command argument.
+
+```sh
+python3 poc/root_probe.py --host "$ELEMENT_HOST" --key "$ELEMENT_KEY" \
+  --known-hosts local/known_hosts --legacy-rsa identity
+
+mkdir -p local
+python3 poc/root_probe.py --host "$ELEMENT_HOST" --key "$ELEMENT_KEY" \
+  --known-hosts local/known_hosts --legacy-rsa screenshot --output local/screen.png
+```
+
+`identity` requires explicit UID/GID 0 output; HTTP 200 alone is insufficient. `screenshot` runs `screencap -p` with a five-second device-side kill deadline, makes the image SFTP-readable, and checks PNG signature, chunk lengths/CRCs, end marker and expected 800×480 dimensions. It does not independently decode every pixel. Existing output files are refused; the requested PNG is saved only after retrieval and verified endpoint cleanup. JSON includes dimensions, byte count and SHA-256.
+
+The probe uses a fresh random directory beneath `/mnt/tmp/httproot/SWUpgrades/`, uploads its interpreter mapping last, and removes that mapping first. It deletes only its own named files, requires successful directory removal and checks the former URL returns HTTP 404. Cleanup is attempted on handled failure, including an interrupted HTTP response. A failed cleanup makes the command fail even if the identity/image was retrieved.
+
+The temporary path is printed to stderr before staging for recovery. A failed/timed-out directory creation leaves ownership unconfirmed; the probe reports the path for inspection rather than deleting a potentially pre-existing directory. Process termination, host loss and inaccessible device can leave artifacts; endpoint 404 is not independent process-lifecycle proof. The root identity operation is a short fixed command; only screenshot capture has a device-side kill deadline. No persistent service is installed.
+
+`--ssh-port` and `--http-port` default to 22 and 8080. `--timeout` defaults to ten seconds per SFTP batch and per complete HTTP exchange, not for the whole multi-step operation. No retries, redirects, key enrollment or automatic firmware compatibility detection are performed. Keep screenshots private: they can contain actual positions, target identities and other display data.
+
+### Native route reads
+
+```sh
+python3 poc/routes.py --host "$ELEMENT_HOST" count
+python3 poc/routes.py --host "$ELEMENT_HOST" list
+```
+
+These query TCP 2053 with a three-second connect timeout and response deadline, plus a 64 KiB response budget. `--timeout` and `--port` are configurable. `count` returns the inline total; `list` uses the observed default sorted-list request for up to 50 GUIDs. GUIDs are printed as exact eight-byte wire values in hex, preserving their order rather than guessing UUID byte order.
+
+The list reader checks success status, command/sequence, serialization type, matching start/end transaction IDs, chunk lengths and count. Split frames and multiple chunks are supported. Count and list are separate snapshots; concurrent edits can make their results differ. No route names, geometry, additions, deletions, visibility writes or navigation activation are requested. GUIDs are installation-specific data; keep saved output local.
+
+### Offline AIS decoding
+
+```sh
+python3 poc/ais_decode.py --file local/target-datagram.bin
+
+# Entirely synthetic example: delete fictitious target ID 123456789.
+# This only decodes bytes locally; it transmits nothing.
+python3 poc/ais_decode.py --hex 01001e0015cd5b07
+```
+
+The binary input must contain **one complete UDP payload**: a 328-byte `TargetChanged` or eight-byte individual deletion. Packet captures, JSONL logs, concatenated records and bare 320-byte targets are not accepted. The decoder validates the envelope, decodes NUL-terminated text and supplies position, motion, dimensions, CPA/TCPA, raw enums, validity bytes and calendar fields in JSON. Malformed/truncated input fails; unavailable measurements become `null`. No network connection is opened.
+
+Raw ship/cargo enums remain internal enums. Last-seen is labelled local clock time; ETA is labelled UTC, retaining its encoded date rather than inventing an arrival year. No timezone conversion, freshness estimate, risk calculation or UI-invalidation emulation is performed. COG validity is reported directly rather than applying the display's low-speed exception. Refer to [AIS semantics](#native-ais-input-and-target-records) for placeholder-year, uncertainty and date-invalidation caveats. Output preserves target identity, text and coordinates present in the input; treat it as private capture data.
+
 ### Output and validation
 
-The scripts write JSON to stdout, errors to stderr, and exit nonzero for failed/unavailable reads or failed control verification. SFTP uses temporary local files and removes them on normal completion. Nothing creates persistent captures automatically. Live output can contain coordinates, device-identifying RayDB paths and values; keep saved output in ignored `local/` storage and review it before sharing.
+The scripts write JSON to stdout, errors to stderr, and exit nonzero for failed/unavailable reads or failed control verification. SFTP uses temporary local files and removes them on normal completion. The root screenshot command saves a PNG only at the explicitly requested output path. Live output and decoded AIS inputs can contain coordinates, target identities, route GUIDs, device-identifying RayDB paths and values; keep saved output in ignored `local/` storage and review it before sharing.
 
-These new scripts have **offline validation only**. The underlying operations were demonstrated in the private research; the packaged PoCs have not been tested against hardware. The synthetic tests cover split frames, multi-chunk replies, truncation, length limits, transaction mismatch, missing fields, signedness, nonfinite values, brightness conversion and SFTP write/readback/failure handling.
+These new scripts have **offline validation only**. The underlying operations were demonstrated in the private research; the packaged PoCs have not been tested against hardware. The synthetic tests cover split frames, multi-chunk replies, truncation, length limits, transaction mismatch, missing fields, signedness, nonfinite values, brightness conversion, SFTP write/readback/failure handling, native route transactions, AIS units/validity and root-probe cleanup/failure handling.
 
 ```sh
 python3 -m unittest discover -s tests -v
