@@ -8,6 +8,7 @@ The investigated baseline is product **E70531**, application **3.13.332**, bundl
 
 | Section | Contents |
 | --- | --- |
+| [Root access](#root-access) | Verified UID 0 execution through SFTP staging and the HTTP server |
 | [Python PoCs](#python-pocs) | Runnable navigation, RayDB and SFTP examples; offline tests |
 | [Architecture and compatibility](#architecture-and-compatibility) | Android platform, application services, GNSS implementation, established limits |
 | [Network services](#network-service-inventory) | Endpoint inventory, roles, discovery, unverified assignments |
@@ -18,7 +19,7 @@ The investigated baseline is product **E70531**, application **3.13.332**, bundl
 | [Brightness control](#remote-lcd-brightness-control) | Sysfs interface, firmware percentage curve, Python reference and readback |
 | [Native routes](#native-waypoint-and-route-transfer-tcp-2053) | Waypoint/route transactions, GPX staging and chart visibility |
 | [AIS input](#native-ais-input-and-target-records) | Local LNet source, target fields, validity, freshness and alerts |
-| [Android execution and graphics](#temporary-android-execution-and-graphics) | HTTP helper, screenshots, overlays and local applications |
+| [Android execution and graphics](#temporary-android-execution-and-graphics) | Screenshots, overlays and local applications |
 | [Remote buttons](#remote-buttons) | Android/Linux key mapping, bounded holds and release limits |
 | [Screen streaming](#live-screen-streaming) | H.264 capture, keyframes, WebRTC and measured continuity |
 | [Buzzer and audio](#buzzer-and-general-audio) | Source-derived MCU tones and acoustic limits |
@@ -27,10 +28,11 @@ The investigated baseline is product **E70531**, application **3.13.332**, bundl
 
 ## Main findings
 
+- **Root execution is verified.** Authenticated SFTP can stage a directory-local HTTP interpreter mapping that invokes a fixed shell helper as UID/GID 0. This enables custom Android/native programs, screenshots, remote input and screen capture on the investigated baseline.
 - Direct TCP **2051** `GetPreferredItem` queries returned GPS position/status, SOG/COG, depth, water temperature, altitude and stored statistics. The observed read path required no SSH tunnel or application authentication exchange.
 - TCP **23333** exposes RayDB settings and diagnostics. Navigation measurements were absent from the investigated RayDB capture; use the native database for those measurements.
 - Display supply voltage is readable through RayDB or the `secondary/vbatt` sysfs attribute over authenticated SFTP.
-- Authenticated SFTP can transfer SD-card files and write the LCD brightness attribute. Ordinary SSH command execution is restricted; a separate temporary HTTP helper executed as root.
+- Authenticated SFTP can transfer SD-card files and write the LCD brightness attribute. Ordinary SSH command execution remains restricted; see [root access](#root-access) for the separate execution path.
 - Remote theme values were changed and restored through RayDB, with independent readback. Visible UI effect and reboot persistence were not established.
 - TCP **2053** supports native waypoint and route creation with independent readback. GPX upload and native creation are separate operations; on-screen GPX import and route rendering remain unconfirmed.
 - An Element-local LNet AIS source accepted targets and rendered them on the chart. A later Wi-Fi-fed gateway displayed received vessels and recovered from feed loss; this does not establish a standard NMEA-over-IP listener.
@@ -44,6 +46,36 @@ These are reverse-engineered observations, not a vendor-supported API contract. 
 This repository contains reviewed prose, runnable Python PoCs and synthetic offline tests. It excludes raw captures, firmware dumps, credentials, SSH host keys, device serials, MAC addresses, installation addresses, vessel details, routes, tracks and actual coordinates. Examples use `ELEMENT_HOST`, `PRODUCT_CODE SERIAL`, and `SOURCE_ID` placeholders. Supply your own values locally; keep them out of commits.
 
 The private research history is not imported. No device interaction is required to read or maintain this documentation.
+
+## Root access
+
+**A staged helper executed as UID/GID 0 on the investigated Element 7 S.** The entry point is the installed BusyBox HTTP server on TCP 8080, reached after staging files through the authenticated `media_rw` SFTP account. Ordinary SSH remains forced SFTP; the HTTP execution path provides the privileged process.
+
+### Execution mechanism
+
+The verified chain is:
+
+```text
+Authenticated SFTP
+  → temporary directory under /mnt/tmp/httproot/SWUpgrades/
+  → directory-local httpd.conf maps a helper extension to /system/bin/sh
+  → HTTP request on TCP 8080 invokes the staged fixed script
+  → shell helper executes as UID/GID 0
+```
+
+BusyBox accepts a directory-local interpreter mapping. The research associated a chosen file extension with `/system/bin/sh`, staged a fixed helper using that extension, and requested its path beneath `/SWUpgrades/`. The helper's identity output established root execution. An HTTP 404 at the server root does not exclude executable handlers in subdirectories.
+
+An already enrolled public key and independently verified SSH host key are prerequisites for the demonstrated staging path; see [SFTP access](#sftp-access-and-storage). The HTTP trigger itself had no independent authentication. This finding does not establish an unauthenticated file-upload route or unrestricted SSH login.
+
+### Verified uses and lifetime
+
+Later trials used this path to launch Dex jars with `app_process`, run native ARM64 programs, capture the composed display, inject keys and encode live video. No APK installation, firmware modification or network ADB activation was required. These are demonstrated uses of the privileged execution path, not assumptions based solely on UID 0.
+
+Staging is on tmpfs. The research created temporary directories, bounded each helper's runtime, removed the interpreter mapping and exact owned files, and checked that the former endpoint returned HTTP 404. Endpoint removal, process exit and window removal are separate checks. A detached helper can outlive its HTTP response, as verified in the later AIS trials; closing the request alone is not cleanup.
+
+This is verified temporary root execution, not a reboot-persistent root installation. A maintained client needs a scoped authenticated channel, device-side deadlines and cleanup; no generic execution client is supplied in this repository.
+
+Provenance: private EXP-039 identity probe; EXP-051/054 privileged screenshots and Android overlay; EXP-058 detached helper and forwarding trials; EXP-059/061/063 input and capture; EXP-065/066 native application rendering and lifecycle checks.
 
 ## Python PoCs
 
@@ -776,11 +808,7 @@ Provenance: private EXP-034–038 discovery/input analysis; EXP-051 source/rende
 
 ## Temporary Android execution and graphics
 
-The forced-SFTP SSH account remains restricted, but it can stage a separate temporary execution mechanism beneath `/mnt/tmp/httproot/SWUpgrades/`. A directory-local BusyBox `httpd.conf` associates a chosen helper extension with `/system/bin/sh`; an HTTP request on TCP 8080 invokes that fixed script. The helper executed as UID/GID 0. This is a distinct HTTP path, not evidence that ordinary SSH commands work.
-
-Later trials used it to launch a Dex jar with `app_process`, acquire actual `screencap -p` images and remove the helper afterward. No APK installation, firmware modification or network ADB activation was required. Temporary staging is on tmpfs and does not establish a reboot-persistent service.
-
-The transient HTTP trigger had no independent authentication. The research bounded its lifetime, used fixed scripts, removed the interpreter mapping and exact owned files, and checked HTTP 404 afterward. Endpoint removal, process exit and window removal are separate checks. A maintained client needs a scoped authenticated channel, device-side deadlines and cleanup; no generic execution client is supplied in this repository.
+The [root execution path](#root-access) launches temporary Android helpers through `app_process`. The following findings cover the resulting display behavior and its limits.
 
 ### Screenshots and overlays
 
