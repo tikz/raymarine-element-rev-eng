@@ -16,6 +16,13 @@ The investigated baseline is product **E70531**, application **3.13.332**, bundl
 | [RayDB protocol](#raydb-settings-and-diagnostics-tcp-23333) | TCP 23333 framing, GET, typed values, diagnostics and settings |
 | [SFTP and storage](#sftp-access-and-storage) | Connection prerequisites, account restrictions, SD-card transfers |
 | [Brightness control](#remote-lcd-brightness-control) | Sysfs interface, firmware percentage curve, Python reference and readback |
+| [Native routes](#native-waypoint-and-route-transfer-tcp-2053) | Waypoint/route transactions, GPX staging and chart visibility |
+| [AIS input](#native-ais-input-and-target-records) | Local LNet source, target fields, validity, freshness and alerts |
+| [Android execution and graphics](#temporary-android-execution-and-graphics) | HTTP helper, screenshots, overlays and local applications |
+| [Remote buttons](#remote-buttons) | Android/Linux key mapping, bounded holds and release limits |
+| [Screen streaming](#live-screen-streaming) | H.264 capture, keyframes, WebRTC and measured continuity |
+| [Buzzer and audio](#buzzer-and-general-audio) | Source-derived MCU tones and acoustic limits |
+| [Wi-Fi configuration](#wi-fi-profile-configuration) | Android static IPv4 configuration and durability limits |
 | [Evidence and open questions](#evidence-confidence-and-unresolved-work) | Claim provenance, confidence, unresolved work |
 
 ## Main findings
@@ -23,8 +30,12 @@ The investigated baseline is product **E70531**, application **3.13.332**, bundl
 - Direct TCP **2051** `GetPreferredItem` queries returned GPS position/status, SOG/COG, depth, water temperature, altitude and stored statistics. The observed read path required no SSH tunnel or application authentication exchange.
 - TCP **23333** exposes RayDB settings and diagnostics. Navigation measurements were absent from the investigated RayDB capture; use the native database for those measurements.
 - Display supply voltage is readable through RayDB or the `secondary/vbatt` sysfs attribute over authenticated SFTP.
-- Authenticated SFTP can transfer SD-card files and write the LCD brightness attribute. Shell execution is restricted.
+- Authenticated SFTP can transfer SD-card files and write the LCD brightness attribute. Ordinary SSH command execution is restricted; a separate temporary HTTP helper executed as root.
 - Remote theme values were changed and restored through RayDB, with independent readback. Visible UI effect and reboot persistence were not established.
+- TCP **2053** supports native waypoint and route creation with independent readback. GPX upload and native creation are separate operations; on-screen GPX import and route rendering remain unconfirmed.
+- An Element-local LNet AIS source accepted targets and rendered them on the chart. A later Wi-Fi-fed gateway displayed received vessels and recovered from feed loss; this does not establish a standard NMEA-over-IP listener.
+- Temporary Android helpers displayed custom text, captured screenshots, injected buttons and streamed the composed **800×480** display. A custom H.264 capture path supported a ten-minute browser-viewing trial with viewer and host-gateway recovery.
+- Source-derived secondary-MCU commands produced duration-bounded tones and audible pitch changes. Successful PCM playback execution produced no reported sound.
 
 These are reverse-engineered observations, not a vendor-supported API contract. Each section separates observed behavior, firmware analysis and unresolved interpretation. Transport success does not establish sensor validity or freshness.
 
@@ -140,7 +151,7 @@ Source metadata also contains an encoded device serial. Its value is deliberatel
 
 ### Boundaries
 
-No general remote shell, root access, raw NMEA gateway, usable screen mirror, remote route-edit API or automatic GPX import was established. File upload capability alone does not establish application import. Natural GPS loss/recovery, source switching, midnight rollover and long-running reconnect behavior remain unresolved.
+Ordinary SSH remains forced SFTP. Later research established a separate temporary root-execution path, native route creation, local AIS ingestion and custom screen streaming; see the corresponding guides below. A standard raw NMEA network gateway and automatic GPX import remain unverified. File upload capability alone does not establish application import. Natural GPS loss/recovery, source switching, midnight rollover and long-running reconnect behavior remain unresolved.
 
 Provenance: private EXP-008 system inventory, EXP-012 script/binary inspection, EXP-013, EXP-022/023 navigation, EXP-030 product identity and EXP-031–033 GNSS investigations. See [evidence policy](#evidence-confidence-and-unresolved-work).
 
@@ -153,18 +164,19 @@ The following records describe the investigated firmware. Listener availability 
 | TCP 22 | SSH, restricted `media_rw` SFTP; authenticated forwarding observed | No interactive shell; enrollment persistence unresolved |
 | TCP 2051 | Native LNet database; successful preferred navigation-item reads | See [protocol](#native-navigation-database-tcp-2051); broader API not mapped |
 | TCP 2055 | LNet navigation status; 54-byte frame, message `0x00070007`, matched serializer | Named field meanings incomplete; not raw NMEA |
-| TCP 2053/2054 | Reachable and silent in probes | Waypoint/track candidates; assignments unverified |
+| TCP 2053 | Native waypoint/route service; count, list, GET and additions verified | Rendering, GPX import and restart durability unconfirmed |
+| TCP 2054 | Reachable and silent in earlier probes | Assignment unverified |
 | TCP 23333 | RayDB remote adapter; HELLO/GET and targeted setting mutation verified | Distinct from navigation database |
 | TCP 49111, loopback | Internal RayDB, diagnostic GET through authenticated forwarding | Different framing from 23333 |
 | TCP 6668 / UDP 6667 | Strong static attribution to LNet diagnostics | Runtime metadata confirmation incomplete |
-| TCP 8080 | HTTP root returned HTTP/1.0 404; startup launches BusyBox httpd | No root web UI established; other resources not excluded |
+| TCP 8080 | BusyBox httpd; temporary directory-local interpreter mapping executed a staged helper as UID 0 | Root URL 404 does not exclude executable subdirectory handlers |
 | TCP 8182 | Mobile-access messages; public-key enrollment previously demonstrated | Not documented here as a reusable enrollment client |
 | UDP 5800/5801 | LNet discovery/listeners | Discovery response not required for successful direct 2051 reads |
 | UDP 2050/2052/2056/3220 | Sockets recorded | Individual roles unresolved |
 | UDP 5353 | mDNS; historical RayDB/control/RTSP advertisements | Advertised service does not prove usable endpoint |
 | UDP 1900 | Listener consistent with IR-camera discovery bind code | Runtime ownership/camera presence unverified |
 | TCP/UDP 53 | Loopback/P2P listener observations | No general LAN DNS service established |
-| TCP 8554/50000 | RTSP/control advertised historically but closed when checked | No usable mirroring/control established |
+| TCP 8554/50000 | Vendor RTSP/control advertised historically; later connections still refused | Custom Android capture works independently of these services |
 
 ### Discovery and address selection
 
@@ -176,7 +188,7 @@ A separate packed GPS-status datagram implementation is 640 bytes. It is distinc
 
 Use direct [TCP 2051](#native-navigation-database-tcp-2051) for the verified navigation records, [RayDB](#raydb-settings-and-diagnostics-tcp-23333) for identified diagnostic/settings paths, and [authenticated SFTP](#sftp-access-and-storage) for permitted file/sysfs access. Determine the host locally and confirm it is the intended device; do not hard-code a research installation's address.
 
-Provenance: private EXP-013 and endpoint investigations EXP-015–021, plus EXP-029 theme mutation. No listener was probed while preparing these public documents.
+Provenance: private EXP-013 and endpoint investigations EXP-015–021, plus EXP-029 theme mutation, EXP-042 route exchanges and EXP-054/061/063 execution/capture trials. No listener was probed while preparing these public documents.
 
 ## Native navigation database: TCP 2051
 
@@ -452,6 +464,8 @@ sftp -i "$ELEMENT_KEY" \
 
 The legacy RSA options were needed for the investigated OpenSSH 6.8 server; scope them to this connection. `local/known_hosts` must already contain the established host key. Do not bypass an unexpected host-key change. Private keys are never uploaded to the device or committed here.
 
+Same-key re-enrollment restored rejected SFTP authentication in EXP-041; the cause of the lost authorization was not observed. In EXP-058 a new enrollment identity caused an on-screen approval prompt, while the previously approved identity could be re-enrolled without one. These are different cases, not evidence of unconditional silent enrollment.
+
 Enrollment storage was associated with tmpfs and an initialization clear operation. Reboot persistence was not demonstrated; authentication failure after restart may require enrollment again. Do not confuse rejected authentication with changed host identity or failed network reachability.
 
 ### Useful paths
@@ -463,13 +477,13 @@ Enrollment storage was associated with tmpfs and an initialization clear operati
 | `/sys/devices/platform/raymarine/secondary/vbatt` | Read display input voltage in millivolts |
 | `/sys/devices/platform/raymarine/backlight:lcd/` | Read brightness bounds/readback and write brightness |
 
-Within SFTP, `get REMOTE_FILE LOCAL_FILE` downloads and `put LOCAL_FILE REMOTE_FILE` uploads. Upload can overwrite an existing file. Filesystem transfer does not trigger or prove GPX/route import; no remote automatic import operation was established.
+Within SFTP, `get REMOTE_FILE LOCAL_FILE` downloads and `put LOCAL_FILE REMOTE_FILE` uploads. Upload can overwrite an existing file. Filesystem transfer does not trigger or prove GPX/route import. Later [native route creation](#native-waypoint-and-route-transfer-tcp-2053) bypassed the importer rather than proving automatic import.
 
 Listings of `/data` and several protected directories were denied. A listed serial device is not an ordinary log file; the GPS serial stream was not consumed in this research. Existing native TCP queries provide navigation data without opening that stream.
 
 Keep captures and host-specific settings outside public tracked content. See [brightness control](#remote-lcd-brightness-control) and [measurement units](#measurement-catalog-and-units) for sysfs behavior.
 
-Provenance: private EXP-001/002 SFTP and SD-card tests, EXP-004 surface survey, EXP-005 enrollment persistence and EXP-007 import investigation.
+Provenance: private EXP-001/002 SFTP and SD-card tests, EXP-004 surface survey, EXP-005 enrollment persistence, EXP-007 import investigation and EXP-041/058 enrollment recovery/approval observations.
 
 ## Remote LCD brightness control
 
@@ -658,6 +672,221 @@ Private EXP-023 brightness analysis establishes interface permissions, driver sc
 
 Restart persistence, UI slider synchronization and conflicts with local controls remain unresolved. Actual device identifiers and saved baseline brightness values are deliberately omitted.
 
+## Native waypoint and route transfer: TCP 2053
+
+TCP 2053 was positively attributed to the native waypoint/route service by successful count, list, GET and addition exchanges. Three new waypoints and one ordered route were created and independently read back. Existing static route records were unchanged. The GPX containing the same geometry was also uploaded and downloaded byte-identically; the native additions were a separate conversion, not a GPX import transaction.
+
+Frames use a little-endian u32 body length, followed by command and sequence u32 words. GUID-bearing requests include eight GUID bytes. The observed operation catalog is:
+
+| Operation | Request / confirmation | Serialization type |
+| --- | --- | --- |
+| Route count | `0x0f014e` / `0x0f004a` | Inline u32 |
+| Sorted route GUID list | `0x0f0140` / `0x0f0040` | Request 26, response 25 |
+| Get waypoint | `0x0f0103` / `0x0f0006` | 53 |
+| Add waypoint | `0x0f0107` / `0x0f0003` | 53 |
+| Get route | `0x0f0143` / `0x0f0046` | 51 |
+| Add route | `0x0f0147` / `0x0f0043` | 51 |
+
+Serialization transactions use `0x0f0200` (GUID, type), `0x0f0201` (chunk length, bytes), and `0x0f0202` (GUID). Observed success was `0x00040000`; an absent GUID returned `0x80040b03`. The route serializer includes static and dynamic data, ordered waypoint GUIDs and leg records. Geographic coordinates use signed 1e-7 degrees; projected coordinates require the firmware's transform. This catalog is insufficient by itself to construct complete objects; no route-write client is shipped here.
+
+### Staging and visibility
+
+The verified card staging directory is `/mnt/internal_slot1/Raymarine/My Data/`. Use a new local filename, inspect the destination first, and compare upload/download hashes. The conventional import workflow is card staging followed by the display's Import/export menu; that importer was not exercised in the newer trial.
+
+Route visibility is a scoped chart setting. The investigated standalone Chart used pane 24 and stored mode 9; those values describe the observed context, not a universal current pane. These path shapes retain placeholders for the active profile and view:
+
+```text
+Settings/Data/PROFILE_ID/16/57/-/-/PANE_ID/MODE_ID = bool false
+Settings/Data/PROFILE_ID/16/26/-/-/PANE_ID/MODE_ID = list []
+```
+
+Parameter 57 is `hideNonActiveRoutes`; parameter 26 is a route GUID **hide** list. False/empty permits non-active routes and excludes none through that list. It does not selectively show one route or fit the viewport. Independent GETs verified the selected values, but actual route rendering, export roundtrip and restart durability remain unresolved. Showing a route and activating Follow/navigation are separate operations; navigation was not activated.
+
+Provenance: private EXP-040–042, including native confirmations, coordinate/order readbacks and static-record preservation checks.
+
+## Native AIS input and target records
+
+The firmware contains a native LNet AIS receiver, distinct from standard NMEA-over-IP. Static discovery analysis found service 30, internal type `0x1019`, a 36-byte advertisement, source-derived UDP control/data endpoints and exactly-one-master selection. The receive path binds wildcard sockets but filters by the selected interface's subnet. Ordinary Wi-Fi advertisements outside the accepted LNet address range did not establish a source; the initial bounded trial sent no targets after source acceptance failed.
+
+The working path stages and controls an **Element-local relay over Wi-Fi**, then advertises and sends native AIS on loopback. It received `GetAllTargets` (`0x001e0100`) and `GetAllSRMs` (`0x001e0102`) controls, established multicast membership, and rendered synthetic targets with screenshot and owner confirmation. Loopback/multicast addresses are protocol transport choices, not a requirement to copy the research installation's network configuration.
+
+A later gateway trial displayed received AIS vessels, reattached to a detached helper through authenticated SSH forwarding, withdrew its source after receiver loss and restored it when input returned. Those observations establish a working integration path, not compatibility with every target class, long-running alarm behavior or reboot recovery. Socket creation required a privileged bootstrap; the helper then dropped to UID 1023.
+
+### Target envelope and field catalog
+
+`TargetChanged` is 328 bytes: u32LE `0x001e0000`, new/changed byte at offset 4, zero at 5, u16LE length 320 at 6, then the 320-byte serialized target at offset 8. Individual deletion is u32LE `0x001e0001` followed by the target ID u32LE.
+
+**Offsets below are relative to the 320-byte record.** Add 8 for the datagram or inspected C++ object. Integers are little-endian. Validity bytes should be 1 for available data and 0 for unavailable data; text is NUL-terminated. This is a field catalog, not a complete constructor/defaults specification.
+
+| Field | Record offset / encoding | Validity or limit |
+| --- | --- | --- |
+| Target ID / MMSI | `0x00`, u32 | Target identity and replacement key |
+| Target alarm state | `0x08`, u32 | 1 ordinary; 2/3 dangerous-state inputs; separate from navigation status |
+| COG / SOG | `0x0c` u16 radians × 10,000 / `0x0e` u16 m/s × 100 | `0xdc` / `0xdd` |
+| CPA / TCPA | `0x10` u32 metres / `0x14` u32 seconds | Shared gate `0xde`; native producer also sets `0xdf` |
+| Latitude / longitude | `0x18` / `0x1c`, i32 degrees × 10⁷ | Geographic range checks; projected fields also required |
+| Projected northing / easting | `0x20` / `0x24`, i32 | Firmware ellipsoid-corrected transform, not plain Web Mercator |
+| True heading | `0x38`, u16 radians × 10,000 | `0xe0`; preferred over COG for orientation |
+| Navigation status | `0x3c`, u32 | Standard AIS status; distinct from alarm state |
+| Rate of turn | `0x44`, i16 radians/s × 32,000 | `0xe1` |
+| Length / beam / draught | `0x48` / `0x4c` / `0x50`, u32 metres × 10 | `0xe6` / `0xe7` / `0xe9`; length also requires nonzero value |
+| Last-seen date / time | `0x5c` u16 days since 1970 / `0x60` u32 seconds within day | `0xea`; native producer uses local clock time |
+| ETA date / time | `0x64` u16 days since 1970 / `0x68` u32 seconds within day | `0xe5`; UTC with native placeholder-year caveat |
+| IMO | `0x6c`, u32 | Getter reads value directly; producer also writes `0xe4` |
+| Ship type / cargo | `0x70` / `0x74`, u32 internal enums | Producer flags `0xe3` / `0xe2`; translate standard AIS codes |
+| Monotonic update tick | `0x78`, u32 | Wrapped device milliseconds / 1000; separate from calendar last-seen |
+| Name / destination / call sign | `0x9c` / `0xbf` / `0xd4` | At most 20 / 20 / 7 normal AIS ASCII bytes, plus NUL |
+| Own-vessel COG/SOG certainty | `0x10b`, byte | Zero forces uncertainty independently of target motion |
+
+Ship type is an internal enum: standard code 70 maps to ship type 12/cargo 0, code 80 to 13/0, code 37 to 21/0 and code 52 to 2/0. The native decoder maps unavailable code 0 to type 25. Copying a standard AIS ship-type number directly into `0x70` is incorrect. These examples are protocol mappings, not captured vessel details.
+
+Heading, COG, SOG and position were independently compared with an open target-details screenshot. Passive captures also showed that missing static/voyage fields were already absent or invalid in the incoming record; empty display boxes did not establish a transport limitation. Most newly mapped static/date/ROT fields remain supported by firmware analysis rather than a populated-field display trial.
+
+### Freshness, uncertainty and risk
+
+The demonstrated source announced once per second and refreshed targets every five seconds. Source withdrawal produced an AIS-disconnected dialog and reported beeps. Source presence, per-target observation age, device tick and calendar last-seen are independent concepts.
+
+Static timeout branches commonly yield 60 or 360 seconds, with a 120-second SART branch. However, deliberately aged injected targets remained drawn in the bounded live observation. A consumer should enforce its own freshness policy and send individual deletes for expired targets; automatic native expiry is not a verified guarantee for this injection path. One capacity trial drew 150 targets when 200 were sent, establishing an approximate observed display limit rather than an unlimited target table.
+
+Dashed/uncertain icons are separate from lost-target state. The inspected selector checks target motion validity and the supplied own-vessel certainty byte, not target count or age. The specific reported fleet-wide color transition remains unresolved. Do not set certainty merely to obtain a desired icon color. Combined COG/SOG validity has a firmware exception: SOG must be valid, but missing COG can still pass when stored speed is at most 8.0 m/s. A displayed zero course at low speed therefore does not independently prove northward motion.
+
+LNet copies supplied CPA/TCPA and target state. Do not assume it recalculates collision risk from injected position/COG/SOG. The alert evaluator uses state independently of CPA validity, so invalid CPA alone does not inhibit a dangerous-state alarm. Ordinary-state CPA field mapping is established statically; the numeric display trial was inconclusive because target details were not open. Fresh ownship/target motion, prediction policy and dangerous-state alarm equivalence remain unverified.
+
+### Calendar time and invalidation
+
+Native last-seen uses **local date/time**, while ETA uses UTC. Both serialize whole seconds within the day, not Unix epoch seconds or the navigation database's 1/10,000-second time units. Last-seen represents an actual observation/reception time; repeatedly resending an old target is not a new observation.
+
+The native AIS message-5 parser supplies placeholder year **2006**, because the AIS ETA has no year. The UI suppresses the year. Static date-converter analysis shows that this fixed non-leap year rejects February 29. A custom record can carry another year, but choosing a different placeholder is an unverified encoder policy.
+
+Two presentation caveats remain static findings: the date portion of last-seen may apply a timezone offset even when its time portion does not, and a valid-to-invalid date update skips both `setValue` and explicit invalidation on an existing display item. A previously shown date may therefore remain visible. Neither midnight behavior nor valid→invalid→valid display transitions were live-verified. Do not silently compensate with a guessed offset or promise that clearing every validity byte clears the corresponding UI value.
+
+### Acknowledging source-loss alerts
+
+Native RayDB over authenticated SSH forwarding to loopback TCP 49111 supports acknowledgment through the alert lifecycle. The path shape is:
+
+```text
+sf/3/call/3/OCCURRENCE_KEY/Acknowledge
+```
+
+The SET contains a QVariantMap with `Key` holding the exact typed occurrence key, and metadata `0003`. Match the active AIS-disconnected occurrence (category 1, ID 49), preserve its typed key, and independently read status afterward. Observed state changed 1→3 with other alert records unchanged; the transient command was removed. A later gateway trial also verified the dialog disappeared in the next screenshot. Acoustic cessation was not independently established.
+
+Acknowledgment does not maintain the source or permanently disable future disconnection alarms. The persistent disable setting remains unresolved; do not delete status/definition records or substitute a global mute.
+
+Provenance: private EXP-034–038 discovery/input analysis; EXP-051 source/rendering; EXP-055–058 risk, alerts and gateway trials; EXP-062 uncertainty; EXP-067/068 details, passive wire/UI comparison and calendar semantics.
+
+## Temporary Android execution and graphics
+
+The forced-SFTP SSH account remains restricted, but it can stage a separate temporary execution mechanism beneath `/mnt/tmp/httproot/SWUpgrades/`. A directory-local BusyBox `httpd.conf` associates a chosen helper extension with `/system/bin/sh`; an HTTP request on TCP 8080 invokes that fixed script. The helper executed as UID/GID 0. This is a distinct HTTP path, not evidence that ordinary SSH commands work.
+
+Later trials used it to launch a Dex jar with `app_process`, acquire actual `screencap -p` images and remove the helper afterward. No APK installation, firmware modification or network ADB activation was required. Temporary staging is on tmpfs and does not establish a reboot-persistent service.
+
+The transient HTTP trigger had no independent authentication. The research bounded its lifetime, used fixed scripts, removed the interpreter mapping and exact owned files, and checked HTTP 404 afterward. Endpoint removal, process exit and window removal are separate checks. A maintained client needs a scoped authenticated channel, device-side deadlines and cleanup; no generic execution client is supplied in this repository.
+
+### Screenshots and overlays
+
+`/system/bin/screencap -p` produced composed **800×480** PNGs. Root-created mode-0600 images could not be downloaded through `media_rw` SFTP; controlled static HTTP retrieval worked in that case, while later trials used readable file permissions. A failed SFTP download does not imply capture failed.
+
+A standalone Android helper created a centered three-line TextView above the chart using a system context, main Looper and WindowManager. It used legacy window type **2006**, translucent pixel format, `FLAG_NOT_FOCUSABLE` and `FLAG_NOT_TOUCHABLE`. Screenshots verified its appearance and removal after 15 seconds, and the marine application retained focus. This API-25 path relies on hidden framework methods; compatibility with other firmware remains untested.
+
+Arbitrary positioning, richer layouts, updating an attached view and sustained update cadence are Android API possibilities, not established Element performance results. The tested overlay had no update endpoint. Forced termination, stalled UI and connection-loss cleanup were not exercised; normal timer removal is the verified path.
+
+A native ARM64 Doom engine subsequently rendered locally into an Android view. A focusable type-2003 variant received injected fire/movement/menu keys, and Home returned to the chart. A separate 20-minute session exited at its deadline; process/window and file cleanup were independently verified. Submitted frame counts are not measured display FPS. Physical simultaneous-button usability, general audio and maintained installation remain unverified.
+
+Native RayDB alerts are another display mechanism: a custom alert produced a visible dialog and a loud beep, and its OK action did not dismiss it. Removing the temporary test stopped it according to the owner. That result is not a quiet notification API; the Android overlay is a separate path.
+
+Provenance: private EXP-039 execution probe, EXP-048–054 alerts/overlays/screenshots and EXP-065/066 local rendering/input trials.
+
+## Remote buttons
+
+Temporary privileged helpers drove arrows, OK, Back, Menu, Home and zoom with screenshot-confirmed effects. Android key codes and Linux event codes are different namespaces:
+
+| Action | Android key name / code | Linux `gpio-keys` code |
+| --- | --- | --- |
+| Up / Down | `DPAD_UP` 19 / `DPAD_DOWN` 20 | 103 / 108 |
+| Left / Right | `DPAD_LEFT` 21 / `DPAD_RIGHT` 22 | 105 / 106 |
+| OK | `ENTER` 66 | 28 |
+| Back | `ESCAPE` 111 | 1 |
+| Menu | `F9` 139 | 67 |
+| Home | `F7` 137 | 65 |
+| Zoom in / out | `PAGE_UP` 92 / `PAGE_DOWN` 93 | 104 / 109 |
+
+Use the `KEYCODE_` prefix with Android `input keyevent`. Android `KEYCODE_MENU` (82) produced no visible chart menu; F9 did. Not every mapping was exercised through both transports. Resolve the current **gpio-keys** node from input inventory; its observed event-device number is not persistent identity.
+
+The working hardware sequence is EV_KEY press, SYN_REPORT, bounded hold, EV_KEY release, SYN_REPORT. Arrow holds of 0.3 seconds moved the cursor. Zoom required a bounded hardware hold; instantaneous Android Page Up/Down and Android `--longpress` did not establish useful zoom. A 0.8-second hold changed scale, but equal opposite holds did not restore it exactly. This is duration-controlled zoom, not a calibrated one-level increment.
+
+The trial's shell trap attempted release on normal exit and catchable signals; independent release after forced kill or network failure remains unverified. EXP-060 collected a baseline only before work moved to streaming. A maintained controller should release keys on a device-side deadline and use fresh visual feedback before confirmation: OK can open a panel whose next selected action activates navigation. Power, MOB, touch and general simultaneous inputs remain untested.
+
+Provenance: private EXP-059/060 button trials and EXP-068 target-details navigation. These findings do not depend on the unavailable vendor TCP 50000 control service.
+
+## Live screen streaming
+
+Custom capture streams the composed **800×480** display as H.264. It is independent of the vendor RTSP/control endpoints, which still refused connections in later checks.
+
+### Built-in recorder baseline
+
+The installed `screenrecord` accepted raw Annex-B H.264 output despite help text describing MP4 only:
+
+```sh
+# Device-side command used inside the temporary privileged helper.
+/system/bin/screenrecord --size 800x480 --bit-rate 2M \
+  --time-limit 30 --output-format=h264 -
+```
+
+Stdout carries binary video; verbose text must not share that stream. A temporary HTTP helper relayed it to a live host decoder. Four bounded trials decoded changing chart/menu content at approximately 17 fps. The calibrated trial measured **226 ms median capture-to-host-decode latency**, with eight steady-state samples spanning 149–336 ms and approximately ±15 ms clock uncertainty. This excludes host presentation/scanout and is not glass-to-glass latency.
+
+Requested 2 Mbps was an encoder setting; observed traffic was substantially lower on the relatively static chart. Raw stream frame-rate metadata was unreliable. The built-in tool limits each invocation to 180 seconds and the matching source uses a ten-second I-frame interval, making uninterrupted viewing and late joins separate problems.
+
+### Custom capture and browser continuity
+
+A custom Java SurfaceControl/MediaCodec helper selected `OMX.google.h264.encoder`, retained capture timestamps and explicitly requested an IDR once per second. The host copied compressed packets into RTSP; MediaMTX delivered them to Chrome over WebRTC without host video re-encoding. The gateway listeners were host-loopback-only. This verifies same-host browser viewing, not Internet access or a browser on a second host.
+
+| Measurement / fault | Observed result |
+| --- | --- |
+| 600-second capture | 6,612 frames, 11.02 fps, 1.08 Mbps; no growing delivery backlog |
+| Final 25-second direct RGB decode | 63 ms median / 141 ms p95 capture-to-decode; approximately ±5 ms clock uncertainty |
+| Chrome jitter buffer | 86–97 ms average during sustained run; additional to capture/transport |
+| Viewer reconnects | 376 and 613 ms |
+| Five-second host-gateway outage | Video returned 2.2 s after restart, 7.2 s after fault injection; capture continued |
+| Closing the Element output stream | EPIPE, resource release and exit 0 observed within 1.72 s; fresh capture restored video |
+| Sampled total device CPU | Median 63%, versus 47–55% idle baseline; background activity uncontrolled |
+
+The configured 10 fps/1 Mbps was not a strict measured cap. Three short browser freezes totaled 1.023 seconds outside deliberate outages. Direct decode measurements and browser buffering are different observations; neither establishes end-to-end display latency or all-day reliability.
+
+Stock scrcpy 5.0.1 launched through `app_process` without network ADB, using a bridge for its Android abstract socket. Its default software encoder produced video, but ordinary I-frame interval changes still yielded only one IDR per tested run. Late browser peers received RTP and decoded no frames. Explicit `request-sync` calls in the custom helper fixed joins. Selecting advertised `OMX.qcom.video.encoder.avc` failed initialization with `0xfffffff4`; codec XML presence does not establish working hardware acceleration.
+
+Keep viewer, host-gateway and Element-capture lifecycles distinct. Host-gateway recovery did not restart capture; loss of the Element output required a fresh capture. A maintained design should preserve timestamps, bound queues, discard backlog during reconnect, request keyframes and keep input/release separate from video. Whole-host loss, half-open TCP stalls, multi-hour thermal/load behavior and authenticated remote deployment remain untested.
+
+Provenance: private EXP-061 built-in recorder and clock-calibrated latency trials; EXP-063 custom capture, browser statistics and deliberate recovery tests.
+
+## Buzzer and general audio
+
+Matching platform-bundle 3.13.76 GPL source explains the buzzer interface. The sysfs handler parses and discards its numeric value, then plays a fixed test; writing zero is not a stop command. `/dev/buzzer` uses definitions plus play/stop ioctls, and its source-defined `BUZZER_STOP_ALL` is a no-op.
+
+The driver sends tone commands to the secondary MCU on `/dev/ttyHSL1`, separate from GNSS `/dev/ttyHSL0`. Authenticated SFTP v3 `OPEN` with WRITE|APPEND flags (6) and one WRITE per complete frame avoided a seek on the non-seekable TTY. No stream read or serial configuration change was needed.
+
+| Packet component | Encoding |
+| --- | --- |
+| Start / payload length / command | `0x2f`, `3 + 7 × steps`, `0x07` |
+| Tone header | Start 1, step count, repeat flag |
+| Each seven-byte step | Step number; frequency Hz, on-time ms, off-time ms as u16 big-endian |
+| Final checksum | `0xff - (sum(previous bytes) & 0xff)` |
+
+The source-derived stop frame is `2f 01 07 00 c8`. Duration-bounded continuous tone and different pitches were acoustically confirmed. Independent one-step packets also produced a recognizable short melody; multi-step packets and lower-register playback had audible failures despite accepted writes. Stop frames were accepted after playback, but interruption of an ongoing sustained tone was not independently verified.
+
+SFTP success is not an MCU or acoustic acknowledgment. Direct writes bypass the driver's internal MCU lock; coexistence and production alarm reliability are untested. The research establishes bounded tones, not an unattended alarm implementation.
+
+General audio is separate. Qualcomm codec/ALSA registration and a successful two-second `tinyplay` execution were observed, with routing restored, but the owner reported **no sound**. A fitted audible PCM output is therefore still unverified.
+
+Provenance: private EXP-044–047 buzzer/source investigations and EXP-049 PCM trial.
+
+## Wi-Fi profile configuration
+
+Android `WifiManager.save(WifiConfiguration, ActionListener)` changed an existing Wi-Fi profile to static IPv4 through a temporary helper running as **system UID 1000**; UID 0 was rejected. The saved `/data/misc/wifi/ipconfig.txt`, independent profile readback, live routes, DNS queries and continued SFTP/TCP 2051 access agreed. Other saved profiles were unchanged, and a device-local rollback timer guarded the transaction.
+
+This establishes Android service configuration, not an option in Raymarine's UI. Configured IPv4 DNS servers were not the only effective resolvers: IPv6 retained an advertised resolver. Actual reboot/rejoin durability, exclusive DNS behavior and router address reservation/exclusion remain unresolved. Installation addresses, profile names and resolver values are omitted here.
+
+Provenance: private EXP-064; no Wi-Fi configuration was changed while preparing this documentation.
+
 ## Evidence, confidence and unresolved work
 
 This repository is a public synthesis of the separate `raymarine-element` research project. Private source documents and artifacts were inspected locally to prepare these guides. No new hardware probes were performed for publication, and no raw captures or firmware binaries are distributed here.
@@ -679,6 +908,16 @@ Experiment IDs below identify the private research records. They are labels, not
 | Date and no-fix behavior | EXP-029 GPS identity/date | Producer/consumer analysis; no natural loss-of-fix observation |
 | Product/application identity | EXP-030 | Static producer, product table and serial-format analysis |
 | GNSS driver and loader | EXP-031–033 | Fitted flag, installed driver and loader/extension analysis |
+| Native routes and visibility | EXP-040–042 | Upload/readback, native confirmations and preserved prior static records; rendering unconfirmed |
+| Native AIS input and gateway recovery | EXP-034–038, EXP-051, EXP-058 | Discovery analysis, accepted source, visible targets and later feed-loss/recovery trials |
+| AIS risk, alerts and uncertainty | EXP-055–058, EXP-062 | Static record/evaluator mapping, status readbacks and bounded display observations |
+| AIS detail fields and date semantics | EXP-067/068 | Getter/producer/UI analysis, passive wire capture and independent screen comparison |
+| Temporary execution, overlays and screenshots | EXP-039, EXP-048–054 | Root helper, normal window removal and image inspection; native alert acoustic report |
+| Remote buttons | EXP-059/060 | Input/screenshot trials; precise zoom and failure release unverified |
+| H.264 streaming and continuity | EXP-061/063 | Clock-calibrated decoder timing, browser statistics and deliberate outages |
+| Buzzer and PCM limits | EXP-044–049 | Matching GPL source, accepted tone frames and positive/negative acoustic reports |
+| Wi-Fi profile configuration | EXP-064 | Saved/live readbacks and rollback cleanup; restart untested |
+| Local Android/native application rendering | EXP-065/066 | Gameplay screenshots, input logs, bounded session exit and cleanup |
 
 Captured real measurements and identifiers have been excluded. Protocol fields and algorithms are retained, with corrections from later investigations incorporated. Public readers can inspect the documented formats, but cannot independently replay the original private fixtures from this checkout. Synthetic examples illustrate encoding only and must not be described as live evidence.
 
@@ -701,5 +940,13 @@ Captured real measurements and identifiers have been excluded. Protocol fields a
 8. Exact GNSS receiver model and independent firmware via an attributed status interface.
 9. A reproducible generic public-key enrollment guide, including recovery and lifetime limits.
 10. Compatibility across additional Element models and firmware builds.
+11. Route rendering, GPX import/export roundtrip, complete public object serializers and restart durability.
+12. AIS class/field coverage, capacity, explicit expiry policy, full-day continuity and verified collision-warning behavior.
+13. AIS date display at midnight, leap-day ETA policy and valid→invalid→valid UI transitions.
+14. Calibrated zoom, simultaneous inputs and independent key release after controller failure.
+15. Multi-hour capture reliability, half-open stalls, working hardware encoding and authenticated viewing across hosts.
+16. Persistent overlay update/dismiss control and forced-failure cleanup.
+17. Buzzer pitch/multi-step limits, independent stop interruption and audible general PCM output.
+18. Static Wi-Fi reboot/rejoin durability and effective IPv4/IPv6 DNS policy.
 
-No result here establishes a supported raw NMEA network gateway, every possible remote setting, remote route editing or screen mirroring. Negative results are scoped to the method and baseline, rather than statements that a capability can never exist.
+The native route, AIS and capture paths above are reverse-engineered integrations, not vendor-supported APIs. A standard raw NMEA network gateway, every possible remote setting and compatibility beyond the investigated baseline remain unestablished. Negative results are scoped to the method and baseline, rather than statements that a capability can never exist.
